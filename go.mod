@@ -5,10 +5,10 @@ go 1.27
 require (
 	github.com/glebarez/go-sqlite v1.22.0
 	github.com/go-sql-driver/mysql v1.9.3
-	github.com/lemmego/api v0.1.26
-	github.com/lemmego/gpa v0.1.1
+	github.com/lemmego/api v0.1.29
+	github.com/lemmego/gpa v0.1.2
 	github.com/lemmego/gpaorm v0.1.0
-	github.com/lemmego/migration v0.1.14
+	github.com/lemmego/migration v0.1.17
 	github.com/lemmego/orm v0.1.0
 	github.com/lib/pq v1.10.9
 	github.com/spf13/cobra v1.8.1
@@ -89,11 +89,3 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 	modernc.org/sqlite v1.46.1 // indirect
 )
-
-replace github.com/lemmego/orm => ../orm
-
-replace github.com/lemmego/gpaorm => ../gpaorm
-
-replace github.com/lemmego/gpa => ../gpa
-
-replace github.com/lemmego/migration => ../migration
