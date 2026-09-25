@@ -8,7 +8,7 @@ require (
 	github.com/lemmego/api v0.1.31
 	github.com/lemmego/gpa v0.1.2
 	github.com/lemmego/gpaorm v0.1.2
-	github.com/lemmego/migration v0.1.18
+	github.com/lemmego/migration v0.1.19
 	github.com/lemmego/orm v0.1.2
 	github.com/lib/pq v1.10.9
 	github.com/spf13/cobra v1.8.1
