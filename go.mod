@@ -5,7 +5,7 @@ go 1.27
 require (
 	github.com/glebarez/go-sqlite v1.22.0
 	github.com/go-sql-driver/mysql v1.9.3
-	github.com/lemmego/api v0.1.31
+	github.com/lemmego/api v0.1.37
 	github.com/lemmego/gpa v0.1.2
 	github.com/lemmego/gpaorm v0.1.2
 	github.com/lemmego/migration v0.1.19

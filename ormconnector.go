@@ -14,6 +14,7 @@ import (
 
 	"github.com/lemmego/api/app"
 	"github.com/lemmego/api/config"
+	"github.com/lemmego/api/db"
 	"github.com/lemmego/gpa"
 	"github.com/lemmego/gpaorm"
 	"github.com/lemmego/migration"
@@ -39,38 +40,49 @@ type Provider struct {
 	// Config overrides the configuration read from the app when set.
 	Config gpa.Config
 
-	db    *orm.DB
-	sqlDB *sql.DB
+	db       *orm.DB
+	sqlDB    *sql.DB
+	connName string
+	dialect  db.Dialect
 }
 
 // Provide opens the connection and registers it with the application.
 func (p *Provider) Provide(a app.App) error {
 	settings := p.Config
+	connName := p.Connection
 	if settings.Driver == "" {
-		resolved, err := sqlConfig(p.Connection)
+		resolved, selected, err := sqlConfig(p.Connection)
 		if err != nil {
 			return err
 		}
-		settings = resolved
+		settings, connName = resolved, selected
 	}
 
-	db, err := Connect(settings)
+	ormDB, err := Connect(settings)
 	if err != nil {
 		return err
 	}
-	p.db = db
-	p.sqlDB = db.SQLDB()
+	p.db = ormDB
+	p.sqlDB = ormDB.SQLDB()
+	p.connName = connName
+	p.dialect, _ = db.ParseDialect(settings.Driver)
 
-	a.AddService(db)
+	a.AddService(ormDB)
 
 	if p.UseGPA {
-		provider := gpaorm.New(db)
+		provider := gpaorm.New(ormDB)
 		if err := provider.Configure(settings); err != nil {
 			return err
 		}
 		gpa.RegisterDefault(provider)
 		a.AddService(provider)
 	}
+
+	// Publish the connection under the shared seam so framework packages
+	// that need a table can find it without naming *orm.DB. This is outside
+	// the UseGPA branch on purpose: the seam is about the pool, not about
+	// which abstraction the application writes its own queries through.
+	db.Register(a, p)
 	return nil
 }
 
@@ -96,8 +108,15 @@ func (p *Provider) Shutdown(ctx context.Context) error {
 func (p *Provider) DB() *orm.DB { return p.db }
 
 // SQLDB returns the underlying connection, which is what the migration module
-// takes.
+// takes. It is also half of db.Connection.
 func (p *Provider) SQLDB() *sql.DB { return p.sqlDB }
+
+// Dialect reports the SQL flavour of the open connection, completing
+// db.Connection along with Name.
+func (p *Provider) Dialect() db.Dialect { return p.dialect }
+
+// Name reports which sql.connections key this connection was built from.
+func (p *Provider) Name() string { return p.connName }
 
 // Connect opens a connection and wraps it in an ORM handle.
 //
@@ -175,19 +194,25 @@ func DialectFor(driver string) (orm.Dialect, error) {
 }
 
 // driverName normalises the aliases people write in configuration.
+// driverName normalises a configured driver onto the name the migration
+// module uses, so the ORM and `lemmego migrate` always open the same database
+// under the same driver name.
+//
+// The spellings live in db.ParseDialect, which is the one normaliser the
+// framework shares. This function adds only what is specific to the ORM:
+// rejecting a dialect that migration cannot target. TestDialectNamesMatch
+// pins the two vocabularies together.
 func driverName(driver string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(driver)) {
-	case "sqlite", "sqlite3":
-		return migration.DriverSQLite, nil
-	case "mysql", "mariadb":
-		return migration.DriverMySQL, nil
-	case "postgres", "postgresql", "pgsql":
-		return migration.DriverPostgres, nil
-	case "":
+	if strings.TrimSpace(driver) == "" {
 		return "", fmt.Errorf("ormconnector: no database driver configured")
 	}
-	return "", fmt.Errorf("ormconnector: unsupported driver %q, want one of %s",
-		driver, strings.Join(SupportedDrivers(), ", "))
+	switch dialect, known := db.ParseDialect(driver); {
+	case !known, dialect == db.SQLServer:
+		return "", fmt.Errorf("ormconnector: unsupported driver %q, want one of %s",
+			driver, strings.Join(SupportedDrivers(), ", "))
+	default:
+		return string(dialect), nil
+	}
 }
 
 // SupportedDrivers lists the drivers the connector can open. It is deliberately
@@ -245,7 +270,9 @@ func optionsToParams(options map[string]any) string {
 
 // sqlConfig reads the same configuration tree gormconnector reads, so swapping
 // connectors needs no config changes.
-func sqlConfig(connName string) (gpa.Config, error) {
+// It also returns the connection name it resolved, which the seam reports so
+// a package reading connection-scoped configuration knows which block to read.
+func sqlConfig(connName string) (gpa.Config, string, error) {
 	name := connName
 	if name == "" {
 		name = "default"
@@ -253,11 +280,11 @@ func sqlConfig(connName string) (gpa.Config, error) {
 
 	selected, ok := config.Get(fmt.Sprintf("sql.%s", name)).(string)
 	if !ok || selected == "" {
-		return gpa.Config{}, fmt.Errorf("ormconnector: sql.%s is not configured", name)
+		return gpa.Config{}, "", fmt.Errorf("ormconnector: sql.%s is not configured", name)
 	}
 	connection, ok := config.Get(fmt.Sprintf("sql.connections.%s", selected)).(config.M)
 	if !ok {
-		return gpa.Config{}, fmt.Errorf("ormconnector: sql.connections.%s is not configured", selected)
+		return gpa.Config{}, "", fmt.Errorf("ormconnector: sql.connections.%s is not configured", selected)
 	}
 
 	settings := gpa.Config{
@@ -265,7 +292,7 @@ func sqlConfig(connName string) (gpa.Config, error) {
 		Database: connection.String("database"),
 	}
 	if settings.Driver == "" || settings.Database == "" {
-		return gpa.Config{}, fmt.Errorf("ormconnector: sql.connections.%s needs a driver and a database", selected)
+		return gpa.Config{}, "", fmt.Errorf("ormconnector: sql.connections.%s needs a driver and a database", selected)
 	}
 
 	if normalised, err := driverName(settings.Driver); err == nil && normalised != migration.DriverSQLite {
@@ -277,7 +304,7 @@ func sqlConfig(connName string) (gpa.Config, error) {
 			settings.Options = options
 		}
 	}
-	return settings, nil
+	return settings, selected, nil
 }
 
 // Get returns the ORM handle from the service container.
