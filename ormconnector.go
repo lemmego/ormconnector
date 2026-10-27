@@ -40,6 +40,13 @@ type Provider struct {
 	// Config overrides the configuration read from the app when set.
 	Config gpa.Config
 
+	// Driver is the registered database/sql driver name to open, when it is
+	// not the one the dialect is named after.
+	//
+	// For an instrumented driver — see ConnectWith. The dialect still comes
+	// from configuration, so `lemmego migrate` and the ORM stay in step.
+	Driver string
+
 	db       *orm.DB
 	sqlDB    *sql.DB
 	connName string
@@ -58,7 +65,7 @@ func (p *Provider) Provide(a app.App) error {
 		settings, connName = resolved, selected
 	}
 
-	ormDB, err := Connect(settings)
+	ormDB, err := ConnectWith(settings, p.Driver)
 	if err != nil {
 		return err
 	}
@@ -123,6 +130,23 @@ func (p *Provider) Name() string { return p.connName }
 // The DSN is built by the migration module so that the ORM and `lemmego
 // migrate` always resolve the same database from the same settings.
 func Connect(settings gpa.Config) (*orm.DB, error) {
+	return ConnectWith(settings, "")
+}
+
+// ConnectWith opens the connection through a named database/sql driver,
+// rather than the one the dialect is named after.
+//
+// For an instrumented driver. A wrapper is registered under a name of its own
+// — sql.Register panics on a duplicate, so it cannot take "postgres" — and
+// Connect opens the canonical name, so there was no way to reach one. The
+// dialect still comes from the configured driver, which is what keeps
+// `lemmego migrate` and the ORM generating the same SQL.
+//
+//	sql.Register("postgres-observed", observe.Wrap(&pq.Driver{}))
+//	&ormconnector.Provider{Driver: "postgres-observed"}
+//
+// An empty name means the canonical one, so this is Connect.
+func ConnectWith(settings gpa.Config, open string) (*orm.DB, error) {
 	driver, err := driverName(settings.Driver)
 	if err != nil {
 		return nil, err
@@ -130,6 +154,13 @@ func Connect(settings gpa.Config) (*orm.DB, error) {
 	dialect, err := DialectFor(driver)
 	if err != nil {
 		return nil, err
+	}
+
+	// The dialect is already decided, so the name below is only what
+	// database/sql is asked to open.
+	open = strings.TrimSpace(open)
+	if open == "" {
+		open = driver
 	}
 
 	dsn := settings.ConnectionURL
@@ -157,9 +188,9 @@ func Connect(settings gpa.Config) (*orm.DB, error) {
 		dsn = ensureMySQLParams(dsn)
 	}
 
-	sqlDB, err := sql.Open(driver, dsn)
+	sqlDB, err := sql.Open(open, dsn)
 	if err != nil {
-		return nil, fmt.Errorf("ormconnector: cannot open %s: %w", driver, err)
+		return nil, fmt.Errorf("ormconnector: cannot open %s: %w", open, err)
 	}
 
 	if settings.MaxOpenConns > 0 {

@@ -2,8 +2,12 @@ package ormconnector
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/lemmego/gpa"
@@ -262,4 +266,79 @@ func TestMySQLParamsAreSupplied(t *testing.T) {
 	if strings.Count(explicit, "parseTime=") != 1 {
 		t.Fatalf("parseTime was duplicated: %s", explicit)
 	}
+}
+
+// TestConnectWithOpensTheNamedDriver.
+//
+// A wrapped driver is registered under a name of its own, because
+// sql.Register panics on a duplicate and so it cannot take "postgres". Connect
+// opens the canonical name, so without this there is no way to reach one —
+// which is what made an instrumented pool impossible through this connector
+// while migration and tasker, which open the configured name, were fine.
+func TestConnectWithOpensTheNamedDriver(t *testing.T) {
+	const name = "sqlite-connectwith-test"
+
+	// A driver standing in for an instrumented one: registered under its own
+	// name, delegating to the real thing.
+	base, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "probe.sqlite"))
+	if err != nil {
+		t.Fatalf("opening a probe connection: %v", err)
+	}
+	wrapped := &countingDriver{wrapped: base.Driver()}
+	if err := base.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sql.Register(name, wrapped)
+
+	settings := gpa.Config{
+		Driver:   "sqlite",
+		Database: filepath.Join(t.TempDir(), "app.sqlite"),
+	}
+
+	db, err := ConnectWith(settings, name)
+	if err != nil {
+		t.Fatalf("ConnectWith: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if _, err := db.Exec(context.Background(), "CREATE TABLE t (id INTEGER)"); err != nil {
+		t.Fatalf("exercising the connection: %v", err)
+	}
+	if wrapped.opened.Load() == 0 {
+		t.Error("ConnectWith did not open the named driver, so an instrumented " +
+			"pool is still unreachable through this connector")
+	}
+
+	// And the dialect still comes from configuration, not from the driver
+	// name — or `lemmego migrate` and the ORM would generate different SQL.
+	if got := db.Dialect().Name(); got != "sqlite" {
+		t.Errorf("dialect = %q, want sqlite from the configured driver", got)
+	}
+}
+
+// TestConnectWithAnEmptyNameIsConnect, so the common path is unchanged.
+func TestConnectWithAnEmptyNameIsConnect(t *testing.T) {
+	settings := gpa.Config{
+		Driver:   "sqlite",
+		Database: filepath.Join(t.TempDir(), "app.sqlite"),
+	}
+	db, err := ConnectWith(settings, "   ")
+	if err != nil {
+		t.Fatalf("ConnectWith with a blank name: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if _, err := db.Exec(context.Background(), "CREATE TABLE t (id INTEGER)"); err != nil {
+		t.Fatalf("a blank name did not fall back to the canonical driver: %v", err)
+	}
+}
+
+type countingDriver struct {
+	wrapped driver.Driver
+	opened  atomic.Int64
+}
+
+func (d *countingDriver) Open(name string) (driver.Conn, error) {
+	d.opened.Add(1)
+	return d.wrapped.Open(name)
 }
