@@ -1,6 +1,6 @@
 # ormconnector
 
-Wires the [Lemmego ORM](../orm) into the application lifecycle.
+Wires the [Lemmego ORM](https://github.com/lemmego/orm) into the application lifecycle.
 
 ## Usage
 
@@ -29,7 +29,7 @@ connectors needs no configuration changes.
 
 ### Running alongside GPA
 
-Set `UseGPA` to also register a [`gpaorm`](../gpaorm) provider, so existing code
+Set `UseGPA` to also register a [`gpaorm`](https://github.com/lemmego/gpaorm) provider, so existing code
 written against `gpa.Repository[T]` keeps working while it migrates:
 
 ```go
