@@ -59,8 +59,28 @@ The supported set is therefore the same as the migration module's — SQLite,
 MySQL and PostgreSQL. SQL Server is absent from both. Aliases (`sqlite3`,
 `postgresql`, `pgsql`, `mariadb`) are normalised.
 
-The connector blank-imports the same drivers the migration module registers, so
-`*sql.DB` from `SQLDB()` can be handed straight to `migration.Init`.
+`*sql.DB` from `SQLDB()` can be handed straight to `migration.Init`, since
+both open the same database under the same driver name.
+
+## Register your driver
+
+This module does not import a `database/sql` driver, so your application does:
+
+```go
+import _ "github.com/lib/pq"              // postgres
+import _ "github.com/glebarez/go-sqlite"  // sqlite
+import _ "github.com/go-sql-driver/mysql" // mysql
+```
+
+`lemmego new` writes the one your project chose. If you are adding a database
+to an existing project, add it yourself — a missing driver fails when the
+connection opens, with `database/sql`'s own message naming the forgotten
+import. That is at boot, on every environment, so it is not a mistake you can
+ship.
+
+It used to import all three, so every project linked the two it had never
+configured; the pure-Go sqlite driver alone is twenty-nine packages of
+translated libc.
 
 ## The `orm:fields` command
 

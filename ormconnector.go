@@ -19,12 +19,6 @@ import (
 	"github.com/lemmego/gpaorm"
 	"github.com/lemmego/migration"
 	"github.com/lemmego/orm"
-
-	// The same drivers the migration module registers, so the ORM and the
-	// migrator open the same databases under the same driver names.
-	_ "github.com/glebarez/go-sqlite"
-	_ "github.com/go-sql-driver/mysql"
-	_ "github.com/lib/pq"
 )
 
 // Provider connects the ORM during application bootstrap.
