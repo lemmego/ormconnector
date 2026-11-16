@@ -34,6 +34,17 @@ type Provider struct {
 	// Config overrides the configuration read from the app when set.
 	Config gpa.Config
 
+	// Options are passed to orm.Open, so an application can configure the
+	// handle this provider builds.
+	//
+	// The one that matters today is orm.WithTenantEnter: a multi-tenant
+	// application needs the database told which tenant a transaction is for
+	// at the moment it opens, and the hook that does it has to be installed
+	// on the handle. Without a way to pass it here, such an application
+	// cannot use this provider at all — it has to open its own connection
+	// and give up everything else the provider does.
+	Options []orm.Option
+
 	// Driver is the registered database/sql driver name to open, when it is
 	// not the one the dialect is named after.
 	//
@@ -59,7 +70,7 @@ func (p *Provider) Provide(a app.App) error {
 		settings, connName = resolved, selected
 	}
 
-	ormDB, err := ConnectWith(settings, p.Driver)
+	ormDB, err := ConnectWith(settings, p.Driver, p.Options...)
 	if err != nil {
 		return err
 	}
@@ -123,8 +134,8 @@ func (p *Provider) Name() string { return p.connName }
 //
 // The DSN is built by the migration module so that the ORM and `lemmego
 // migrate` always resolve the same database from the same settings.
-func Connect(settings gpa.Config) (*orm.DB, error) {
-	return ConnectWith(settings, "")
+func Connect(settings gpa.Config, options ...orm.Option) (*orm.DB, error) {
+	return ConnectWith(settings, "", options...)
 }
 
 // ConnectWith opens the connection through a named database/sql driver,
@@ -140,7 +151,7 @@ func Connect(settings gpa.Config) (*orm.DB, error) {
 //	&ormconnector.Provider{Driver: "postgres-observed"}
 //
 // An empty name means the canonical one, so this is Connect.
-func ConnectWith(settings gpa.Config, open string) (*orm.DB, error) {
+func ConnectWith(settings gpa.Config, open string, options ...orm.Option) (*orm.DB, error) {
 	driver, err := driverName(settings.Driver)
 	if err != nil {
 		return nil, err
@@ -200,7 +211,7 @@ func ConnectWith(settings gpa.Config, open string) (*orm.DB, error) {
 		sqlDB.SetConnMaxIdleTime(settings.ConnMaxIdleTime)
 	}
 
-	return orm.Open(sqlDB, dialect), nil
+	return orm.Open(sqlDB, dialect, options...), nil
 }
 
 // DialectFor maps a driver name onto an ORM dialect. The names match those the

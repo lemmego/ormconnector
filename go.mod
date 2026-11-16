@@ -9,7 +9,7 @@ require (
 	github.com/lemmego/gpa v0.1.3
 	github.com/lemmego/gpaorm v0.1.3
 	github.com/lemmego/migration v0.6.0
-	github.com/lemmego/orm v0.2.0
+	github.com/lemmego/orm v0.3.0
 	github.com/lib/pq v1.10.9
 	github.com/spf13/cobra v1.8.1
 )
