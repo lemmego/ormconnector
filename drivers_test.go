@@ -11,4 +11,13 @@ package ormconnector
 //
 // A test file keeps it out of consumers' builds while leaving the suite able
 // to open a database.
-import _ "github.com/glebarez/go-sqlite"
+// Postgres and MySQL are here for the same reason, and arrived later: until
+// migration v0.6.0 this module got all three registered transitively, because
+// migration.go blank-imported them. v0.6.0 registers none, so the integration
+// suites went from passing to "unknown driver" — which is the forgotten import
+// the message names, in the test binary rather than in a consumer's.
+import (
+	_ "github.com/glebarez/go-sqlite"
+	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/lib/pq"
+)
