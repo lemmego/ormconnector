@@ -156,7 +156,9 @@ func ConnectWith(settings gpa.Config, open string, options ...orm.Option) (*orm.
 	if err != nil {
 		return nil, err
 	}
-	dialect, err := DialectFor(driver)
+	// From settings.Driver, not driver: see DialectFor on why normalising
+	// first would lose the libSQL capability.
+	dialect, err := DialectFor(settings.Driver)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +167,7 @@ func ConnectWith(settings gpa.Config, open string, options ...orm.Option) (*orm.
 	// database/sql is asked to open.
 	open = strings.TrimSpace(open)
 	if open == "" {
-		open = driver
+		open = registeredDriverFor(settings.Driver, driver)
 	}
 
 	dsn := settings.ConnectionURL
@@ -214,20 +216,40 @@ func ConnectWith(settings gpa.Config, open string, options ...orm.Option) (*orm.
 	return orm.Open(sqlDB, dialect, options...), nil
 }
 
-// DialectFor maps a driver name onto an ORM dialect. The names match those the
-// migration module uses, which is what keeps the two in step.
+// DialectFor maps a driver name onto an ORM dialect.
+//
+// It accepts both the canonical names the migration module uses and the
+// aliases db.ParseDialect knows, because it is called with the driver as
+// CONFIGURED rather than after normalisation. That distinction is
+// load-bearing: driverName collapses every SQLite-family spelling onto
+// "sqlite" so the ORM and `lemmego migrate` open the same database under the
+// same name, and collapsing happens before a dialect is chosen — so a dialect
+// picked from the normalised name can only ever be orm.SQLite().
+//
+// libSQL is the case that makes it matter. Its SQL is SQLite's, so it must
+// normalise to "sqlite" for migration's DDL; but its driver refuses a
+// read-only transaction, and orm.LibSQL() is sqliteDialect carrying exactly
+// that one difference. Resolving it to orm.SQLite() would silently restore an
+// option lemmego/tenancy passes on every read path and libSQL answers "read
+// only transactions are not supported" to.
 func DialectFor(driver string) (orm.Dialect, error) {
-	switch driver {
-	case migration.DriverSQLite:
+	switch strings.ToLower(strings.TrimSpace(driver)) {
+	case DriverLibSQL:
+		return orm.LibSQL(), nil
+	case migration.DriverSQLite, "sqlite3":
 		return orm.SQLite(), nil
-	case migration.DriverMySQL:
+	case migration.DriverMySQL, "mariadb":
 		return orm.MySQL(), nil
-	case migration.DriverPostgres:
+	case migration.DriverPostgres, "postgresql", "pgsql", "pgx":
 		return orm.Postgres(), nil
 	}
 	return nil, fmt.Errorf("ormconnector: unsupported driver %q, want one of %s",
 		driver, strings.Join(SupportedDrivers(), ", "))
 }
+
+// DriverLibSQL is the configured driver name for a libSQL server, and also the
+// name github.com/tursodatabase/libsql-client-go registers with database/sql.
+const DriverLibSQL = "libsql"
 
 // driverName normalises the aliases people write in configuration.
 // driverName normalises a configured driver onto the name the migration
@@ -251,10 +273,26 @@ func driverName(driver string) (string, error) {
 	}
 }
 
+// registeredDriverFor answers which name to hand database/sql.
+//
+// Normally the canonical dialect name, which is also what the driver packages
+// register. libSQL is the exception: it normalises to "sqlite" for the
+// dialect and for migration, but the driver registered with database/sql is
+// "libsql", so opening "sqlite" would either fail or — worse, on a project
+// that also imports a SQLite driver — open a local file and look like it
+// worked.
+func registeredDriverFor(configured, canonical string) string {
+	if strings.EqualFold(strings.TrimSpace(configured), DriverLibSQL) {
+		return DriverLibSQL
+	}
+	return canonical
+}
+
 // SupportedDrivers lists the drivers the connector can open. It is deliberately
-// the same set the migration module supports; SQL Server is absent from both.
+// the same set the migration module supports, plus libSQL, which migration
+// targets as sqlite; SQL Server is absent from both.
 func SupportedDrivers() []string {
-	return []string{migration.DriverSQLite, migration.DriverMySQL, migration.DriverPostgres}
+	return []string{migration.DriverSQLite, migration.DriverMySQL, migration.DriverPostgres, DriverLibSQL}
 }
 
 // ensureMySQLParams adds the connection settings the MySQL driver needs to
@@ -326,9 +364,20 @@ func sqlConfig(connName string) (gpa.Config, string, error) {
 	settings := gpa.Config{
 		Driver:   connection.String("driver"),
 		Database: connection.String("database"),
+		// A whole DSN, for a backend whose address is a URL rather than a
+		// host and a port — a libSQL server is "http://host:8080", which
+		// migration.DataSource cannot express: it builds a sqlite file path,
+		// a MySQL user:pass@tcp(...), or Postgres keywords and nothing else.
+		// queue/config.go has read this key all along; this is the standard
+		// connection block catching up.
+		ConnectionURL: connection.String("url"),
 	}
-	if settings.Driver == "" || settings.Database == "" {
-		return gpa.Config{}, "", fmt.Errorf("ormconnector: sql.connections.%s needs a driver and a database", selected)
+	if settings.Driver == "" {
+		return gpa.Config{}, "", fmt.Errorf("ormconnector: sql.connections.%s needs a driver", selected)
+	}
+	// A url is an alternative to a database, not an addition to it.
+	if settings.Database == "" && settings.ConnectionURL == "" {
+		return gpa.Config{}, "", fmt.Errorf("ormconnector: sql.connections.%s needs a database or a url", selected)
 	}
 
 	if normalised, err := driverName(settings.Driver); err == nil && normalised != migration.DriverSQLite {
