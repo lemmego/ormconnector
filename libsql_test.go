@@ -105,3 +105,35 @@ func TestParseDialectKnowsLibSQL(t *testing.T) {
 			DriverLibSQL, dialect, db.SQLite)
 	}
 }
+
+// migration duplicates db.ParseDialect's alias table, because api requires
+// migration and importing api/db there would be a cycle. This module imports
+// both, so it is where the duplication is kept honest.
+func TestMigrationAndParseDialectAgreeOnEverySpelling(t *testing.T) {
+	for _, spelling := range []string{
+		"sqlite", "sqlite3", "libsql",
+		"mysql", "mariadb",
+		"postgres", "postgresql", "pgsql", "pgx",
+	} {
+		fromMigration, okMigration := migration.NormaliseDialect(spelling)
+		fromAPI, okAPI := db.ParseDialect(spelling)
+		if okMigration != okAPI {
+			t.Errorf("%q: migration knows it=%v, db.ParseDialect knows it=%v",
+				spelling, okMigration, okAPI)
+			continue
+		}
+		if fromMigration != string(fromAPI) {
+			t.Errorf("%q: migration says %q, db.ParseDialect says %q",
+				spelling, fromMigration, fromAPI)
+		}
+	}
+
+	// And neither invents a dialect the other refuses.
+	for _, spelling := range []string{"nonsense", "mongo"} {
+		_, okMigration := migration.NormaliseDialect(spelling)
+		_, okAPI := db.ParseDialect(spelling)
+		if okMigration || okAPI {
+			t.Errorf("%q accepted: migration=%v api=%v", spelling, okMigration, okAPI)
+		}
+	}
+}
